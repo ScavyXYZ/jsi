@@ -27,6 +27,7 @@
 #include <ctime>
 #include <functional>
 #include <utility>
+#include <iomanip>   // for std::setw
 
 #pragma warning(disable : 4996)
 #pragma comment(lib, "wbemuuid.lib")
@@ -37,6 +38,16 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
+
+// Helper: convert UTF-8 std::string to std::wstring
+static std::wstring to_wstring(const std::string& s) {
+    if (s.empty()) return L"";
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    if (len <= 1) return L"";
+    std::wstring w(len - 1, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], len);
+    return w;
+}
 
 class Config {
 public:
@@ -213,7 +224,7 @@ void WriteDefaultConfig(const std::string& path) {
         "default_password       = \n"
         "default_dest_dir       = \n";
     f.close();
-    wprintf(L"[*] Default config written: %hs\n", path.c_str());
+    std::wcout << L"[*] Default config written: " << to_wstring(path) << L"\n";
 }
 
 std::mutex       g_mutex;
@@ -313,7 +324,8 @@ void InitProgressLine(const std::string&) {
     CONSOLE_SCREEN_BUFFER_INFO csbi{};
     GetConsoleScreenBufferInfo(hCon, &csbi);
     g_progressRow = csbi.dwCursorPosition.Y;
-    wprintf(L"    Progress: 0/%d (0%%)\n", NetworkConfig::MaxIPRange());
+    std::wcout << L"    Progress: 0/" << NetworkConfig::MaxIPRange() << L" (0%)\n";
+    std::wcout.flush();
 }
 
 void UpdateProgressLine(int done, int total) {
@@ -326,7 +338,9 @@ void UpdateProgressLine(int done, int total) {
 
     COORD go{ 0, g_progressRow };
     SetConsoleCursorPosition(hCon, go);
-    wprintf(L"    Progress: %d/%d (%d%%)    ", done, total, done * 100 / total);
+    std::wcout << L"    Progress: " << done << L"/" << total
+        << L" (" << (done * 100 / total) << L"%)    ";
+    std::wcout.flush();
     SetConsoleCursorPosition(hCon, cur);
 }
 
@@ -335,14 +349,14 @@ std::vector<HostInfo> ScanNetworkArp() {
 
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        wprintf(L"[!] WSAStartup failed\n");
+        std::wcout << L"[!] WSAStartup failed\n";
         return results;
     }
 
     std::string localIP = GetLocalIPAddress();
     size_t lastDot = localIP.find_last_of('.');
     if (lastDot == std::string::npos) {
-        wprintf(L"[!] Could not determine network base\n");
+        std::wcout << L"[!] Could not determine network base\n";
         WSACleanup();
         return results;
     }
@@ -350,10 +364,10 @@ std::vector<HostInfo> ScanNetworkArp() {
     std::string baseIP = localIP.substr(0, lastDot + 1);
     g_scanned = 0;
 
-    wprintf(L"\n[*] Local IP  : %hs\n", localIP.c_str());
-    wprintf(L"[*] Scanning  : %hs0/%hs  (%d threads)\n",
-        baseIP.c_str(), NetworkConfig::SubnetMask().c_str(),
-        NetworkConfig::MaxScanThreads());
+    std::wcout << L"\n[*] Local IP  : " << to_wstring(localIP) << L"\n";
+    std::wcout << L"[*] Scanning  : " << to_wstring(baseIP) << L"0/"
+        << to_wstring(NetworkConfig::SubnetMask()) << L"  ("
+        << NetworkConfig::MaxScanThreads() << L" threads)\n";
 
     InitProgressLine(baseIP);
 
@@ -379,13 +393,13 @@ std::vector<HostInfo> ScanNetworkArp() {
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - startTime).count();
 
-    wprintf(L"\n[+] Scan complete in %.1f s.  Found %zu host(s).\n",
-        elapsed / 1000.0, results.size());
+    std::wcout << L"\n[+] Scan complete in " << (elapsed / 1000.0) << L" s.  Found "
+        << results.size() << L" host(s).\n";
 
     if (DeployConfig::VerboseOutput() && !results.empty()) {
-        wprintf(L"\n");
+        std::wcout << L"\n";
         for (const auto& h : results)
-            wprintf(L"    [+] %-16s %s\n", h.ip.c_str(), h.mac.c_str());
+            std::wcout << L"    [+] " << std::setw(16) << std::left << h.ip << L" " << h.mac << L"\n";
     }
 
     if (ResultsConfig::SortResults()) {
@@ -449,11 +463,11 @@ std::wstring ReadLine() {
         if (ch == L'\r' || ch == L'\n') break;
         if (ch == 3) exit(0);
         if (ch == L'\b') {
-            if (!s.empty()) { s.pop_back(); wprintf(L"\b \b"); }
+            if (!s.empty()) { s.pop_back(); std::wcout << L"\b \b"; }
         }
-        else { s += ch; putwchar(ch); }
+        else { s += ch; std::wcout << ch; }
     }
-    putwchar(L'\n');
+    std::wcout << L"\n";
     return s;
 }
 
@@ -465,42 +479,42 @@ std::wstring ReadPassword() {
         if (ch == L'\r' || ch == L'\n') break;
         if (ch == 3) exit(0);
         if (ch == L'\b') {
-            if (!pw.empty()) { pw.pop_back(); wprintf(L"\b \b"); }
+            if (!pw.empty()) { pw.pop_back(); std::wcout << L"\b \b"; }
         }
-        else { pw += ch; putwchar(L'*'); }
+        else { pw += ch; std::wcout << L'*'; }
     }
-    putwchar(L'\n');
+    std::wcout << L"\n";
     return pw;
 }
 
 std::vector<HostInfo> SelectTargetHosts(const std::vector<HostInfo>& hosts) {
-    wprintf(L"\n%s\n", UIConfig::APP_SEPARATOR.c_str());
-    wprintf(L"  Select targets for deployment\n");
-    wprintf(L"%s\n", UIConfig::APP_SEPARATOR.c_str());
-    wprintf(L"  [A] All hosts (%zu)\n", hosts.size());
-    wprintf(L"  [S] Select manually\n");
-    wprintf(L"  [R] Select range\n");
-    wprintf(L"Choice: ");
+    std::wcout << L"\n" << UIConfig::APP_SEPARATOR << L"\n";
+    std::wcout << L"  Select targets for deployment\n";
+    std::wcout << UIConfig::APP_SEPARATOR << L"\n";
+    std::wcout << L"  [A] All hosts (" << hosts.size() << L")\n";
+    std::wcout << L"  [S] Select manually\n";
+    std::wcout << L"  [R] Select range\n";
+    std::wcout << L"Choice: ";
 
     wchar_t mode = towupper(_getwch());
-    wprintf(L"%c\n\n", mode);
+    std::wcout << mode << L"\n\n";
 
     if (mode == L'A') {
-        wprintf(L"[*] Selected all %zu hosts.\n", hosts.size());
+        std::wcout << L"[*] Selected all " << hosts.size() << L" hosts.\n";
         return hosts;
     }
 
     auto printList = [&]() {
         for (size_t i = 0; i < hosts.size(); ++i)
-            wprintf(L"  [%2zu] %-16s %s\n", i + 1,
-                hosts[i].ip.c_str(),
-                ResultsConfig::ShowMAC() ? hosts[i].mac.c_str() : L"");
+            std::wcout << L"  [" << (i + 1) << L"] " << std::setw(16) << std::left
+            << hosts[i].ip << L" "
+            << (ResultsConfig::ShowMAC() ? hosts[i].mac : L"") << L"\n";
         };
 
     if (mode == L'S') {
-        wprintf(L"Available hosts:\n");
+        std::wcout << L"Available hosts:\n";
         printList();
-        wprintf(L"\nEnter numbers (e.g. 1 3 5 or 1,3,5):\n> ");
+        std::wcout << L"\nEnter numbers (e.g. 1 3 5 or 1,3,5):\n> ";
 
         std::wstring line = ReadLine();
         for (auto& c : line) if (c == L',') c = L' ';
@@ -510,45 +524,45 @@ std::vector<HostInfo> SelectTargetHosts(const std::vector<HostInfo>& hosts) {
         size_t n;
         while (iss >> n) {
             if (n >= 1 && n <= hosts.size()) idx.insert(n - 1);
-            else wprintf(L"[!] Skipped invalid: %zu\n", n);
+            else std::wcout << L"[!] Skipped invalid: " << n << L"\n";
         }
 
         std::vector<HostInfo> sel;
         for (size_t i : idx) sel.push_back(hosts[i]);
-        if (sel.empty()) { wprintf(L"[!] Nothing selected.\n"); return {}; }
+        if (sel.empty()) { std::wcout << L"[!] Nothing selected.\n"; return {}; }
 
-        wprintf(L"\n[*] Selected %zu host(s):\n", sel.size());
+        std::wcout << L"\n[*] Selected " << sel.size() << L" host(s):\n";
         for (const auto& h : sel)
-            wprintf(L"    %-16s %s\n", h.ip.c_str(),
-                ResultsConfig::ShowMAC() ? h.mac.c_str() : L"");
+            std::wcout << L"    " << std::setw(16) << std::left << h.ip << L" "
+            << (ResultsConfig::ShowMAC() ? h.mac : L"") << L"\n";
         return sel;
     }
 
     if (mode == L'R') {
-        wprintf(L"Available hosts:\n");
+        std::wcout << L"Available hosts:\n";
         printList();
-        wprintf(L"\nEnter range (e.g. 2 8):\n> ");
+        std::wcout << L"\nEnter range (e.g. 2 8):\n> ";
 
         std::wstring line = ReadLine();
         for (auto& c : line) if (c == L',') c = L' ';
 
         std::wistringstream rss(line);
         size_t from = 0, to = 0;
-        if (!(rss >> from >> to)) { wprintf(L"[!] Invalid input.\n"); return {}; }
+        if (!(rss >> from >> to)) { std::wcout << L"[!] Invalid input.\n"; return {}; }
 
         if (from < 1) from = 1;
         if (to > hosts.size()) to = hosts.size();
         if (from > to) std::swap(from, to);
 
         std::vector<HostInfo> sel(hosts.begin() + (from - 1), hosts.begin() + to);
-        wprintf(L"\n[*] Selected %zu host(s) [%zu..%zu]:\n", sel.size(), from, to);
+        std::wcout << L"\n[*] Selected " << sel.size() << L" host(s) [" << from << L".." << to << L"]:\n";
         for (const auto& h : sel)
-            wprintf(L"    %-16s %s\n", h.ip.c_str(),
-                ResultsConfig::ShowMAC() ? h.mac.c_str() : L"");
+            std::wcout << L"    " << std::setw(16) << std::left << h.ip << L" "
+            << (ResultsConfig::ShowMAC() ? h.mac : L"") << L"\n";
         return sel;
     }
 
-    wprintf(L"[!] Unknown choice. Deploying to all hosts.\n");
+    std::wcout << L"[!] Unknown choice. Deploying to all hosts.\n";
     return hosts;
 }
 
@@ -664,7 +678,7 @@ bool ExecuteRemoteViaSc(const std::wstring& ip,
 
     DWORD cr = RunCommand(createCmd, 15000);
     if (cr != 0) {
-        wprintf(L"\n   sc create exit: %lu\n    ", cr);
+        std::wcout << L"\n   sc create exit: " << cr << L"\n    ";
         return false;
     }
     Sleep(500);
@@ -708,7 +722,7 @@ int main(int argc, char* argv[]) {
     SetConsoleCP(1251);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
-    wprintf(L"%s\n", UIConfig::APP_TITLE.c_str());
+    std::wcout << UIConfig::APP_TITLE << L"\n";
 
     std::string cfgPath = "deploy.ini";
     for (int i = 1; i < argc - 1; ++i) {
@@ -723,14 +737,15 @@ int main(int argc, char* argv[]) {
     {
         std::ifstream probe(cfgPath);
         if (!probe.is_open()) {
-            wprintf(L"[*] Config file not found\n", cfgPath.c_str());
+            std::wcout << L"[*] Config file not found: " << to_wstring(cfgPath) << L"\n";
             WriteDefaultConfig(cfgPath);
         }
         else if (cfgLoaded) {
-            wprintf(L"[*] Config loaded: %hs\n\n", cfgPath.c_str());
+            std::wcout << L"[*] Config loaded: " << to_wstring(cfgPath) << L"\n\n";
         }
         else {
-            wprintf(L"[!] Could not load config: %hs — using built-in defaults.\n\n", cfgPath.c_str());
+            std::wcout << L"[!] Could not load config: " << to_wstring(cfgPath)
+                << L" — using built-in defaults.\n\n";
         }
     }
 
@@ -739,21 +754,21 @@ int main(int argc, char* argv[]) {
     std::vector<HostInfo> hosts = ScanNetworkArp();
 
     if (hosts.empty() && ARPCacheConfig::UseARPFallback()) {
-        wprintf(L"[*] Active scan found nothing. Trying ARP cache...\n");
+        std::wcout << L"[*] Active scan found nothing. Trying ARP cache...\n";
         hosts = GetLocalIPsFromCache();
     }
 
     if (hosts.empty()) {
-        wprintf(L"[!] No hosts found. Exiting.\n");
+        std::wcout << L"[!] No hosts found. Exiting.\n";
         WriteLog(L"No hosts found, exiting", false);
         CoUninitialize(); return 1;
     }
 
-    wprintf(L"\n[+] Hosts found: %zu\n", hosts.size());
+    std::wcout << L"\n[+] Hosts found: " << hosts.size() << L"\n";
     for (size_t i = 0; i < hosts.size(); ++i)
-        wprintf(L"    [%2zu] %-16s %s\n", i + 1,
-            hosts[i].ip.c_str(),
-            ResultsConfig::ShowMAC() ? hosts[i].mac.c_str() : L"");
+        std::wcout << L"    [" << (i + 1) << L"] " << std::setw(16) << std::left
+        << hosts[i].ip << L" "
+        << (ResultsConfig::ShowMAC() ? hosts[i].mac : L"") << L"\n";
 
     std::vector<HostInfo> targets = SelectTargetHosts(hosts);
     if (targets.empty()) {
@@ -761,18 +776,18 @@ int main(int argc, char* argv[]) {
         CoUninitialize(); return 1;
     }
 
-    wprintf(L"\n[*] Deploy what?\n    [1] File\n    [2] Folder\nChoice: ");
+    std::wcout << L"\n[*] Deploy what?\n    [1] File\n    [2] Folder\nChoice: ";
     wchar_t choice = _getwch();
-    wprintf(L"%c\n\n", choice);
+    std::wcout << choice << L"\n\n";
     bool isFolder = (choice == L'2');
 
     std::wstring selectedPath = BrowseForFileOrFolder(isFolder);
     if (selectedPath.empty()) {
-        wprintf(L"[!] Nothing selected. Exiting.\n");
+        std::wcout << L"[!] Nothing selected. Exiting.\n";
         WriteLog(L"No file/folder selected, exiting", false);
         CoUninitialize(); return 1;
     }
-    wprintf(L"[+] Selected: %s\n\n", selectedPath.c_str());
+    std::wcout << L"[+] Selected: " << selectedPath << L"\n\n";
 
     size_t sep = selectedPath.find_last_of(L"\\/");
     std::wstring itemName = (sep != std::wstring::npos)
@@ -781,9 +796,9 @@ int main(int argc, char* argv[]) {
 
     bool doLaunch = false;
     if (!isFolder) {
-        wprintf(L"[*] Launch after deploy?\n    [1] Yes\n    [2] No\nChoice: ");
+        std::wcout << L"[*] Launch after deploy?\n    [1] Yes\n    [2] No\nChoice: ";
         wchar_t lc = _getwch();
-        wprintf(L"%c\n\n", lc);
+        std::wcout << lc << L"\n\n";
         doLaunch = (lc == L'1');
     }
 
@@ -791,34 +806,33 @@ int main(int argc, char* argv[]) {
     std::wstring password = CredentialConfig::DefaultPassword();
 
     if (username.empty()) {
-        wprintf(L"[*] Credentials\n    Username: ");
+        std::wcout << L"[*] Credentials\n    Username: ";
         username = ReadLine();
     }
     else {
-        wprintf(L"[*] Username from config: %s\n", username.c_str());
+        std::wcout << L"[*] Username from config: " << username << L"\n";
     }
 
     if (password.empty()) {
-        wprintf(L"    Password: ");
+        std::wcout << L"    Password: ";
         password = ReadPassword();
-        wprintf(L"\n");
+        std::wcout << L"\n";
     }
     else {
-        wprintf(L"    Password: (from config)\n\n");
+        std::wcout << L"    Password: (from config)\n\n";
     }
 
     std::wstring destDir = CredentialConfig::DefaultDestDir();
-    wprintf(L"[*] Destination directory on target (default: %s): ", destDir.c_str());
+    std::wcout << L"[*] Destination directory on target (default: " << destDir << L"): ";
     std::wstring userDestDir = ReadLine();
     if (!userDestDir.empty()) destDir = userDestDir;
     if (destDir.back() != L'\\') destDir += L'\\';
 
     PathParts pp = ParseDestPath(destDir);
-    wprintf(L"[+] Destination : %s  (share: %s)\n\n",
-        destDir.c_str(), pp.shareName.c_str());
+    std::wcout << L"[+] Destination : " << destDir << L"  (share: " << pp.shareName << L")\n\n";
     WriteLog(L"Destination: " + destDir, true);
 
-    wprintf(L"[*] Deploying to %zu host(s)...\n\n", targets.size());
+    std::wcout << L"[*] Deploying to " << targets.size() << L" host(s)...\n\n";
     int ok = 0, fail = 0;
 
     for (const auto& host : targets) {
@@ -826,18 +840,18 @@ int main(int argc, char* argv[]) {
         std::wstring dstBase = unc + pp.remainder;
         std::wstring dest = dstBase + itemName;
 
-        wprintf(L"[>] %-16s ", host.ip.c_str());
+        std::wcout << L"[>] " << std::setw(16) << std::left << host.ip << L" ";
 
         if (ConnectToShare(unc, username, password) != NO_ERROR) {
             DWORD err = GetLastError();
-            wprintf(L"[X] Connection failed (error %lu)\n", err);
+            std::wcout << L"[X] Connection failed (error " << err << L")\n";
             WriteLog(L"Failed to connect to " + host.ip
                 + L" error: " + std::to_wstring(err), false);
             ++fail; continue;
         }
 
         if (GetFileAttributesW(unc.c_str()) == INVALID_FILE_ATTRIBUTES) {
-            wprintf(L"[X] Share inaccessible\n");
+            std::wcout << L"[X] Share inaccessible\n";
             WriteLog(L"Share inaccessible on " + host.ip, false);
             WNetCancelConnection2W(unc.c_str(), 0, TRUE);
             ++fail; continue;
@@ -850,26 +864,26 @@ int main(int argc, char* argv[]) {
 
         if (!copied) {
             DWORD err = GetLastError();
-            wprintf(L"[X] Copy failed (error %lu)\n", err);
+            std::wcout << L"[X] Copy failed (error " << err << L")\n";
             WriteLog(L"Copy failed on " + host.ip
                 + L" error: " + std::to_wstring(err), false);
             WNetCancelConnection2W(unc.c_str(), 0, TRUE);
             ++fail; continue;
         }
 
-        wprintf(L"[V] OK\n");
+        std::wcout << L"[V] OK\n";
         WriteLog(L"Successfully deployed to " + host.ip, true);
 
         if (doLaunch) {
             std::wstring remoteExe = destDir + itemName;
-            wprintf(L"    [~] Launching %s ... ", remoteExe.c_str());
+            std::wcout << L"    [~] Launching " << remoteExe << L" ... ";
 
             if (ExecuteRemoteViaSc(host.ip, remoteExe)) {
-                wprintf(L"[V] Started\n");
+                std::wcout << L"[V] Started\n";
                 WriteLog(L"Successfully launched on " + host.ip, true);
             }
             else {
-                wprintf(L"[X] Launch failed\n");
+                std::wcout << L"[X] Launch failed\n";
                 WriteLog(L"Launch failed on " + host.ip, false);
             }
         }
@@ -880,9 +894,9 @@ int main(int argc, char* argv[]) {
 
     ExportResults(hosts, targets, ok, fail);
 
-    wprintf(L"\n%s\n", UIConfig::APP_SEPARATOR.c_str());
-    wprintf(L"  Done!  OK: %d  |  Failed: %d\n", ok, fail);
-    wprintf(L"%s\n", UIConfig::APP_SEPARATOR.c_str());
+    std::wcout << L"\n" << UIConfig::APP_SEPARATOR << L"\n";
+    std::wcout << L"  Done!  OK: " << ok << L"  |  Failed: " << fail << L"\n";
+    std::wcout << UIConfig::APP_SEPARATOR << L"\n";
 
     WriteLog(L"Deployment completed. Success: " + std::to_wstring(ok)
         + L" Failed: " + std::to_wstring(fail), true);
